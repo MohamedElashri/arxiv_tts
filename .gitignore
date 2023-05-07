@@ -1,0 +1,6 @@
+temp/
+venv/
+**/*.pdf
+**/*.tex
+**/*.wav
+__pycache__/
