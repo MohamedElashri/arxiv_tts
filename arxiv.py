@@ -6,8 +6,8 @@ import scipy.io.wavfile
 from bs4 import BeautifulSoup
 from fairseq.checkpoint_utils import load_model_ensemble_and_task_from_hf_hub
 from fairseq.models.text_to_speech.hub_interface import TTSHubInterface
-
-
+import sys
+import tarfile
 def download_paper(paper_id: str) -> None:
     """Download a paper from arXiv."""
     print(f"Downloading paper {paper_id}...")
@@ -16,47 +16,59 @@ def download_paper(paper_id: str) -> None:
 
 
 def extract_tar_gz(paper_id: str) -> None:
-    """Extract the .tar.gz file to a temp folder."""
-    tar_gz_file = Path(f"{paper_id}*.tar.gz").resolve().glob().next()
-    subprocess.run(["tar", "-xzf", str(tar_gz_file)], check=True)
-
+    """Extract the contents of a tar.gz file to a temporary folder."""
+    # Find the tar.gz file.
+    tar_gz_file = next(Path(".").resolve().glob(f"{paper_id}*.tar.gz"))
+    # Extract the tar.gz file to a temp folder.
+    with tarfile.open(tar_gz_file) as f:
+        f.extractall()
 
 def get_sentences_from_tex(paper_id: str) -> List[str]:
-    """Convert the paper from LaTeX to HTML and extract sentences."""
-    # Find the .tex files in the temp folder.
-    tex_files = list(Path().resolve().glob("*.tex"))
+    """Extract sentences from .tex files in a temporary folder."""
+    # Find all the .tex files in the temp folder.
+    tex_files = list(Path(".").resolve().glob("*.tex"))
     # Find the .tex file whose content starts with the string \documentclass.
     documentclass_files = [
-        f for f in tex_files
-        if f.read_text().startswith("\documentclass")
+        tex_file for tex_file in tex_files if tex_file.read_text().startswith("\\documentclass")
     ]
     assert len(documentclass_files) == 1, "There should be only one documentclass file."
     documentclass_file = documentclass_files[0]
     # Convert the .tex file to .md file.
     subprocess.run(["pandoc", str(documentclass_file), "-o", f"{paper_id}.html", "-t", "html5"], check=True)
     # Load the .html file with BeautifulSoup4.
-    html = Path(f"{paper_id}.html").read_text()
+    with open(f"{paper_id}.html", "r") as f:
+        html = f.read()
     soup = BeautifulSoup(html, "html.parser")
-    # Cleanup. Remove unwanted tags.
-    for element in soup(["span", "div", "section", "a", "figure"]):
-        if element.get("class") == ["citation"]:
-            element.decompose()
-        elif element.get("class") in (["math", "inline"], ["math", "display"]):
-            element.decompose()
-        elif element.get("class") in (["figure"], ["figure*"]):
-            element.decompose()
-        elif element.get("class") == ["thebibliography"]:
-            element.decompose()
-        elif element.get("class") == ["center"]:
-            element.decompose()
-        elif element.get("class") == ["footnotes"]:
-            element.decompose()
-    # Write the cleaned .html file back.
-    Path(f"{paper_id}_cleaned.html").write_text(soup.prettify())
-    # Read the cleaned .html file back line by line.
-    lines = Path(f"{paper_id}_cleaned.html").read_text().splitlines()
+    # Cleanup.
+    for element in soup.find_all("span", class_="citation"):
+        element.decompose()
+    for element in soup.find_all("span", class_="math inline"):
+        element.decompose()
+    for element in soup.find_all("span", class_="math display"):
+        element.decompose()
+    for element in soup.find_all("div", class_="figure"):
+        element.decompose()
+    for element in soup.find_all("div", class_="figure*"):
+        element.decompose()
+    for element in soup.find_all("div", class_="thebibliography"):
+        element.decompose()
+    for element in soup.find_all("div", class_="center"):
+        element.decompose()
+    for element in soup.find_all("section", class_="footnotes"):
+        element.decompose()
+    for element in soup.find_all("a"):
+        element.decompose()
+    for element in soup.find_all("figure"):
+        element.decompose()
+    # Write the .html file back.
+    with open(f"{paper_id}_cleaned.html", "w") as f:
+        f.write(soup.prettify())
+    # Read that .html file back line by line.
+    with open(f"{paper_id}_cleaned.html", "r") as f:
+        lines = f.readlines()
     # Convert to sentences.
     sentences = []
+    accumumlated_sentence = ""
     for line in lines:
         if line.startswith("<"):
             # Opening tags that we expect.
@@ -64,9 +76,9 @@ def get_sentences_from_tex(paper_id: str) -> List[str]:
                 pass
             # Closing tags that we expect. 
             elif line.startswith("</p>") or line.startswith("</h1>") or line.startswith("</h2>") or line.startswith("</h3>") or line.startswith("</h4>"):
-                sentence = accumumlated_sentence.strip().replace("\n", " ")
+                accumumlated_sentence = accumumlated_sentence.replace("\n", " ")
                 # Split by period so that we can insert a pause.
-                for x in sentence.split("."):
+                for x in accumumlated_sentence.split("."):
                     sentences.append(x.strip())
                     sentences.append("<PAUSE>")
                 # Start over and add pause.
@@ -75,10 +87,8 @@ def get_sentences_from_tex(paper_id: str) -> List[str]:
             else:
                 print(f"Unexpected HTML tag: {line}")
         else:
+            # Accumulate texts.
             accumumlated_sentence += line
-    # Write to a file.
-    sentences = [s for s in sentences if s.strip()]
-    Path(f"{paper_id}_sentences.txt").write_text("\n".join(sentences))
     return sentences
 
 
@@ -126,20 +136,20 @@ def main() -> None:
     paper_id = "1706.03762"
     if len(sys.argv) > 1:
         paper_id = sys.argv[1]
-    # Create a temp directory.
-    temp_dir = Path("temp")
-    temp_dir.mkdir(exist_ok=True)
+    # Create a tmp directory.
+    tmp_dir = Path("tmp")
+    tmp_dir.mkdir(exist_ok=True)
     # Download the paper.
     download_paper(paper_id)
-    # Extract the .tar.gz file to a temp folder.
+    # Extract the .tar.gz file to a tmp folder.
     extract_tar_gz(paper_id)
     # Convert to sentences.
     sentences = get_sentences_from_tex(paper_id)
     # Convert sentences to speech.
     convert_sentences_to_wav(paper_id, sentences)
-    # Remove the temp directory.
-    # Remove the temp directory.
-    subprocess.run(["rm", "-rf", str(temp_dir)], check=True)
+    # Remove the tmp directory.
+    # Remove the tmp directory.
+    subprocess.run(["rm", "-rf", str(tmp_dir)], check=True)
 
 
 if __name__ == "__main__":
