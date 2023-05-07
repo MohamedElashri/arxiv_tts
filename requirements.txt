@@ -1,0 +1,5 @@
+beautifulsoup4==4.11.2
+fairseq==0.12.2
+transformers==4.28.1
+g2p-en==2.1.0
+bs4==0.0.1
